@@ -431,6 +431,28 @@ class _AmdWin:
                       ctypes.byref(inp), ctypes.byref(out), self.device) != 0:
             self.device = ctypes.c_uint(0)
 
+    def close(self):
+        """Give back what the driver lent this reader: the PMLog device handle and the ADL context.  A one-off read
+        (free_vram_mib, the startup probes, amd_card_count) builds a reader per call, and an ADL context that is
+        never destroyed is a handle that stays: #1434 measured +2 handles per free_vram_mib() call on a 7900 XTX
+        before its close().  Safe to call twice and on a reader whose _setup failed part way (the context is
+        destroyed only when it exists); a closed reader simply reads nothing."""
+        if self.ctx is not None:
+            if self.device.value and self.adapter is not None:
+                self._call(self.lib.ADL2_Device_PMLog_Device_Destroy, self.ctx, ctypes.c_int(self.adapter),
+                           self.device)
+            self.device = ctypes.c_uint(0)
+            self._call(self.lib.ADL2_Main_Control_Destroy, self.ctx)
+            self.ctx = None
+        self.adapter = None
+        self.card_count = 0
+
+    def __del__(self):
+        try:
+            self.close()      # the sampler's readers go away with the server; a finalizer must never raise
+        except Exception:  # noqa: BLE001 - interpreter shutdown can leave the driver DLL unloaded already
+            pass
+
     def read(self):
         out = {}
         if not self.ok():
@@ -547,7 +569,10 @@ def amd_card_count():
     0 when there is no AMD driver here.  Reads card 0, whose _setup counts every present discrete card."""
     if os.name != "nt":
         return 0
-    return getattr(_AmdWin(0), "card_count", 0)
+    reader = _AmdWin(0)
+    n = getattr(reader, "card_count", 0)
+    reader.close()          # a throwaway reader: its ADL context goes back now, not at process exit
+    return n
 
 
 def gpu_reader(index=0, amd=False):
@@ -616,14 +641,21 @@ def windows_amd_cards(adapters=None) -> list:
 
 
 def free_vram_mib(index=0, amd=False):
-    """Free VRAM of a card in MiB, or None when it cannot be read."""
+    """Free VRAM of a card in MiB, or None when it cannot be read.  The reader is thrown away, so its driver
+    handles (ADL context, PMLog device) are released here rather than left for the process to end with: the
+    server calls this in a 0.5 s retry loop while it waits for VRAM."""
     g = gpu_reader(index, amd)
-    if not g.ok():
-        return None
-    r = g.read()
-    if r.get("mem_total") is None or r.get("mem_used") is None:
-        return None
-    return int((r["mem_total"] - r["mem_used"]) >> 20)
+    try:
+        if not g.ok():
+            return None
+        r = g.read()
+        if r.get("mem_total") is None or r.get("mem_used") is None:
+            return None
+        return int((r["mem_total"] - r["mem_used"]) >> 20)
+    finally:
+        close = getattr(g, "close", None)      # NVML has no cleanup; the AMD readers do
+        if close is not None:
+            close()
 
 
 # ------------------------------------------------------------------------------------------------ CPU / RAM

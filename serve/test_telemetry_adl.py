@@ -4,7 +4,9 @@ No GPU or download is required for the safety half: on a box without atiadlxx.dl
 "unavailable" (ok() False, read() {}) and never raise, so the server keeps running.  On a box that does have the
 driver (the R9700 / RX 9070 XT the Monitor is meant for), the same reader must fill gpu_util / gpu_temp /
 gpu_mem_used / gpu_power, and each card's own PCIe link (PMLog's negotiated BUS_SPEED / BUS_LANES) so a
-motherboard's PCI bifurcation shows the real width per slot."""
+motherboard's PCI bifurcation shows the real width per slot.  A reader also holds an ADL context, so a one-off
+read has to give it back - the handle-growth finding reported on #1434."""
+import gc
 import os
 import unittest
 
@@ -67,6 +69,49 @@ class AdlReadings(unittest.TestCase):
             return
         for i in range(n):
             self.assertTrue(_AmdWin(i).ok())
+
+
+class AdlReaderCleanup(unittest.TestCase):
+    """A reader holds an ADL context and a PMLog device handle, so a one-off read has to give them back: #1434
+    measured +2 process handles per free_vram_mib() call on a 7900 XTX before its close(), and the server calls
+    that in a 0.5 s retry loop while it waits for VRAM."""
+
+    def test_close_is_safe_and_idempotent(self):
+        r = _AmdWin(0)          # on a box without atiadlxx.dll this reader never opened anything at all
+        r.close()
+        r.close()               # closing twice must not fault on handles that are already gone
+        self.assertFalse(r.ok())
+        self.assertEqual(r.read(), {})
+        self.assertEqual(r.card_count, 0)
+
+    @unittest.skipIf(os.name != "nt", "the ADL reader is Windows only")
+    def test_one_off_reads_do_not_grow_handles(self):
+        if _AmdWin(0).lib is None:
+            self.skipTest("no atiadlxx.dll on this box")
+        if self.handles() is None:
+            self.skipTest("kernel32 GetProcessHandleCount is unavailable")
+        for _ in range(3):      # warm up: the first read starts PMLog and caches the Device Manager query
+            free_vram_mib(0, amd=True)
+        gc.collect()
+        before = self.handles()
+        for _ in range(40):
+            free_vram_mib(0, amd=True)
+        gc.collect()
+        after = self.handles()
+        self.assertLessEqual(after, before + 4, f"40 one-off reads grew the handle count {before} -> {after}")
+
+    @staticmethod
+    def handles():
+        """The process handle count, without a dependency: kernel32's GetProcessHandleCount, the same figure
+        psutil reports and the one #1434's reproduction measured.  None when the call is unavailable."""
+        import ctypes
+        count = ctypes.c_uint(0)
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        if not kernel32.GetProcessHandleCount(kernel32.GetCurrentProcess(), ctypes.byref(count)):
+            return None
+        return count.value
 
 
 if __name__ == "__main__":

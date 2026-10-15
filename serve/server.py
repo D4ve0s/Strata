@@ -2784,12 +2784,17 @@ def gpu_vram_mib(indices: list[int], hip: bool = False) -> dict[int, int] | None
     out = {}
     for i in indices:
         g = gpu_reader(i, amd=hip)
-        if not g.ok():
-            return None
-        total = g.read().get("mem_total")
-        if total is None:
-            return None
-        out[i] = int(total) >> 20
+        try:
+            if not g.ok():
+                return None
+            total = g.read().get("mem_total")
+            if total is None:
+                return None
+            out[i] = int(total) >> 20
+        finally:
+            close = getattr(g, "close", None)   # a throwaway reader: the AMD driver handles go back now (#1434)
+            if close is not None:
+                close()
     return out
 
 

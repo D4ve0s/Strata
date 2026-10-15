@@ -90,7 +90,10 @@ set "VDIR=%BUILD_DIR%-vision"
 >>"%TEMP%\strata_llama_dir.py" echo import setup
 >>"%TEMP%\strata_llama_dir.py" echo print(setup.get_llama_cpp())
 set "LLAMA="
-for /f "delims=" %%L in ('"%ROCM_VENV%\Scripts\python.exe" "%TEMP%\strata_llama_dir.py" "%SRC%"') do set "LLAMA=%%L"
+rem the doubled outer quotes are needed: the command starts AND ends with a quote, and cmd would otherwise
+rem strip those two and try to run the whole line as one file name (the rocm-sdk/vswhere calls end unquoted and
+rem are fine as they are).
+for /f "delims=" %%L in ('""%ROCM_VENV%\Scripts\python.exe" "%TEMP%\strata_llama_dir.py" "%SRC%""') do set "LLAMA=%%L"
 if not exist "%LLAMA%\tools\mtmd\mtmd.cpp" (echo llama.cpp at the pinned commit is missing from third_party & exit /b 1)
 if not exist "%VDIR%\build.ninja" (
   cmake -G Ninja -S "%SRC%\tools\vision" -B "%VDIR%" -DCMAKE_BUILD_TYPE=Release ^
