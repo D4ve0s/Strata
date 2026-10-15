@@ -63,3 +63,6 @@ build-vision-cpu.bat
 
 /.ccache/
 /.rocm-win/
+
+# local agent notes for this machine (paths, GPU arch, local BUILD.json stamps) - not contributor-accurate
+/strata-dev.instructions.md
