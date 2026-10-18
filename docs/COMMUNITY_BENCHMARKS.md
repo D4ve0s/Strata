@@ -66,7 +66,11 @@ and their limits. Report what you actually measured and label estimates separate
   IQ2_XS with adaptive cache E4/S24: 48.23 accepted-decode tok/s (median of 5) on a modified, locally built engine (not an official release; source commit and hashes in provenance.json, steps in REPRODUCE.md).
 - [2026-10-12: Radeon 780M (gfx1103), Ryzen 7 8745HS, 60 GB RAM, GTT 50 GiB](../bench/results/2026-10-12-community-gfx1103/README.md):
   the gfx1103 port (native dot4, the gfx11 WMMA kernels, the exact speed switches and a calibrated hipBLASLt table), hand-built on ROCm 10.1, Q2_0 + MTP at 32K: prompts 90 tok/s plain, 186 with the table, 277 with the WMMA opt-ins (4K), decode 13.1 -> 14.3 tok/s; zero GPU resets.
-
+- [2026-10-17: AMD Radeon AI PRO R9700 + RX 9070 XT (gfx1201), Ryzen 7 7800X3D, 63 GiB RAM](../bench/results/2026-10-17-community-ai-pro-r9700-plus-rx-9070-xt-qwen3-8-flash-next-coder-iq1-m/README.md):
+  Strata 0.1.44.1 (fork build 9832cad5), Coder IQ1_M, 131,072-token context, two-card HIP split with
+  `STRATA_PCIE_AUTO_SPLIT=1`; short chat, fresh 4K/16K prompts and a 5-turn agent session, 3 runs each.
+  Speed only, no correctness check; PCIe Gen5 x4 (R9700) / x8 (9070 XT).
+  
 ## Run the benchmark
 
 The simplest report is one command after setup. Windows: double-click `BENCH.bat`. Linux: `./bench.sh`. Or
