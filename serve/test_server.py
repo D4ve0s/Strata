@@ -2204,6 +2204,19 @@ class PeerDevice(unittest.TestCase):
         self.assertEqual(engine_args({"args": list(done), "vision": {"gpu": True}}), done)
         self.assertEqual(engine_args({"args": list(args)}), args)                # no section: no images
 
+    def test_hip_on_windows_reserves_above_the_wddm_floor(self):
+        # a GPU image encoder on Windows AMD sits on top of the engine's own WDDM floor (#1376 #1709): 700 alone
+        # would fall under it, so the reserve is 3260 there - and a CPU encoder needs no flag at all, the floor stands
+        args = ["--native", "x"]
+        hip = {"args": list(args), "backend": "hip", "vision": {"exe": "v", "gpu": True}}
+        with mock.patch.object(os, "name", "nt"):
+            self.assertEqual(engine_args(dict(hip)), args + ["--vision", "--vram-reserve-mib", "3260"])
+        with mock.patch.object(os, "name", "posix"):
+            self.assertEqual(engine_args(dict(hip)), args + ["--vision", "--vram-reserve-mib", "700"])
+        cpu = {"args": list(args), "backend": "hip", "vision": {"exe": "v", "gpu": False}}
+        with mock.patch.object(os, "name", "nt"):
+            self.assertEqual(engine_args(dict(cpu)), args + ["--vision"])
+
     def test_split_added_for_several_gpus(self):
         self.assertEqual(engine_args({"args": ["--native", "x"], "gpu": [0, 1]}),
                          ["--native", "x", "--layer-split", "auto"])
@@ -5592,6 +5605,89 @@ class VisionCacheEviction(unittest.TestCase):
                 v.encode(f"image {i}".encode())
             self.assertEqual(len(v.cache), 64)
             self.assertFalse(first.exists())
+
+
+class VisionStats(unittest.TestCase):
+    """The Monitor's image card: what one Vision records about its encodes (the READY line, _note)."""
+
+    def make(self, d, replies):
+        import serve.server as server
+        v = server.Vision.__new__(server.Vision)
+        v.dir, v.cache, v.lock = d, {}, threading.Lock()
+        v.load = lambda src: src
+        v.normalize = staticmethod(lambda data: data)
+
+        class Pipe:
+            def __init__(self):
+                self.q, self.last = list(replies), ""
+
+            def write(self, text):
+                self.last = text
+
+            def flush(self):
+                (d / self.last.split()[2]).write_bytes(b"x")
+
+            def readline(self):
+                return self.q.pop(0) + chr(10)
+
+        pipe = Pipe()
+        v.proc = SimpleNamespace(stdin=pipe, stdout=pipe)
+        return v
+
+    def test_an_encode_records_its_numbers(self):
+        with tempfile.TemporaryDirectory() as t:
+            v = self.make(Path(t), ["OK 196 14 14 1432"])
+            v.encode(b"a picture")
+            self.assertEqual(v.totals, {"images": 1, "cached": 0, "image_tokens": 196,
+                                        "encode_ms": 1432.0, "failures": 0})
+            rec = v.encodes[-1]
+            self.assertEqual((rec["tokens"], rec["nx"], rec["ny"], rec["ms"], rec["cached"]),
+                             (196, 14, 14, 1432.0, False))
+
+    def test_a_cache_hit_counts_but_adds_no_time(self):
+        with tempfile.TemporaryDirectory() as t:
+            v = self.make(Path(t), ["OK 196 14 14 1432"])
+            v.encode(b"a picture")
+            v.encode(b"a picture")
+            self.assertEqual((v.totals["images"], v.totals["cached"], v.totals["encode_ms"]), (1, 1, 1432.0))
+            self.assertTrue(v.encodes[-1]["cached"])
+            self.assertIsNone(v.encodes[-1].get("ms"))
+
+    def test_an_older_encoder_printing_only_the_token_count_still_counts(self):
+        with tempfile.TemporaryDirectory() as t:
+            v = self.make(Path(t), ["OK 3"])
+            v.encode(b"a picture")
+            self.assertEqual((v.totals["images"], v.totals["image_tokens"], v.totals["encode_ms"]), (1, 3, 0.0))
+            self.assertIsNone(v.encodes[-1]["ms"])
+
+    def test_a_refused_picture_counts_as_a_failure(self):
+        with tempfile.TemporaryDirectory() as t:
+            v = self.make(Path(t), ["ERR the mmproj could not read it"])
+            with self.assertRaises(ValueError):
+                v.encode(b"a picture")
+            self.assertEqual((v.totals["failures"], v.totals["images"]), (1, 0))
+            self.assertEqual(list(v.encodes), [])
+
+    def test_the_ready_line_and_the_process_lifetime(self):
+        import serve.server as server
+
+        class Proc:
+            stdout = io.StringIO("READY 2560\n")
+            stdin = io.StringIO()
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with mock.patch.object(server.subprocess, "Popen", lambda args, **kw: Proc()), \
+                mock.patch.object(server, "contain"):
+            v = server.Vision({"exe": "strata-vision", "mmproj": "m.gguf", "model": "t.gguf"})
+            self.assertEqual((v.n_embd, v.starts, v.stops), (2560, 1, 0))
+            self.assertIsNotNone(v.started_at)
+            v.close()
+            self.assertEqual(v.stops, 1)
 
 
 class BudgetOverRam(unittest.TestCase):
