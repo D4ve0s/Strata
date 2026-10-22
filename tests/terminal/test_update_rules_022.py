@@ -53,6 +53,15 @@ class BusyCardTest(test_updater.UpdaterCase):
             raise updater.TestStartFailed(staged.version, reason)
         return runner
 
+    def test_free_vram_in_the_test_log_is_not_misreported_as_a_busy_card(self):
+        failure = updater.TestStartFailed(
+            "engine 0.1.47",
+            "it did not answer a one-token probe (startup_wait_expired) | "
+            "strata serve: 7821 MiB of VRAM free with everything loaded",
+        )
+        self.assertFalse(failure.busy)
+        self.assertNotIn("looks busy", str(failure))
+
     def test_a_busy_card_is_not_held_against_the_engine(self):
         self.install_current()
         self.publish(("0.1.47", fx.GOOD_ENGINE))

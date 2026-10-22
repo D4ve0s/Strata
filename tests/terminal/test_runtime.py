@@ -92,6 +92,24 @@ class RuntimeTests(unittest.TestCase):
             code = main(["runtime", *args, "--output", "json"])
         return code, json.loads(output.getvalue())
 
+    def test_windows_owned_server_uses_base_python_without_losing_venv_packages(self):
+        venv = self.root / "venv"
+        site = venv / "Lib" / "site-packages"
+        site.mkdir(parents=True)
+        base = self.root / "base-python.exe"
+        base.touch()
+        base_prefix = self.root / "base"
+        base_prefix.mkdir()
+        with mock.patch.object(runtime, "WINDOWS", True), \
+                mock.patch.object(runtime.sys, "executable", str(venv / "Scripts" / "python.exe")), \
+                mock.patch.object(runtime.sys, "_base_executable", str(base), create=True), \
+                mock.patch.object(runtime.sys, "prefix", str(venv)), \
+                mock.patch.object(runtime.sys, "base_prefix", str(base_prefix)), \
+                mock.patch.object(runtime.sys, "path", [str(venv), str(site)]):
+            executable, env = runtime._owned_server_python()
+        self.assertEqual(executable, str(base))
+        self.assertIn(str(site), env["PYTHONPATH"].split(os.pathsep))
+
     def test_component_inspection_bridge_is_read_only_and_reports_missing_files(self):
         command = [sys.executable, "-m", "strata_control.management"]
         root = Path(__file__).resolve().parents[2]

@@ -468,6 +468,34 @@ def _engine_preflight(plan: dict) -> None:
         raise ProfileError(str(exc), exc.exit_code) from None
 
 
+def _owned_server_python() -> tuple[str, dict]:
+    """Choose an interpreter whose Popen PID is the server PID, retaining venv imports on Windows."""
+    executable = sys.executable
+    child_env = os.environ.copy()
+    if WINDOWS:
+        base = getattr(sys, "_base_executable", None)
+        if isinstance(base, str) and base and os.path.isfile(base) and \
+                os.path.normcase(os.path.abspath(base)) != os.path.normcase(os.path.abspath(executable)):
+            executable = base
+            if sys.prefix != sys.base_prefix:
+                venv = Path(sys.prefix).resolve()
+                base_prefix = Path(sys.base_prefix).resolve()
+                paths = []
+                for entry in sys.path:
+                    if not entry:
+                        continue
+                    path = Path(entry).resolve()
+                    if path != venv and venv not in path.parents:
+                        continue
+                    if path == base_prefix or base_prefix in path.parents:
+                        continue
+                    paths.append(str(path))
+                if paths:
+                    existing = child_env.get("PYTHONPATH")
+                    child_env["PYTHONPATH"] = os.pathsep.join([*paths, *([existing] if existing else [])])
+    return executable, child_env
+
+
 def _check_start_candidate(name: str, expected_profile_revision: str | None,
                            expected_source_sha256: str | None) -> tuple[dict, str]:
     plan, digest = _start_candidate(name)
@@ -806,14 +834,14 @@ class Host:
                        "--owner-fd", "0" if WINDOWS else str(reader)]
         attestation_key = secrets.token_bytes(32)
         expected_attestation = launch_identity.attestation(attestation_key, source_bytes, server_args)
-        child_env = os.environ.copy()
+        server_python, child_env = _owned_server_python()
         child_env["STRATA_OWNER_ATTEST_KEY"] = attestation_key.hex()
         child_env["STRATA_NO_ACQUIRE"] = "1"      # a managed server never installs or downloads (acquisition.py)
         child_env["STRATA_RUNTIME_PROFILE"] = self.name   # the records of its engine say which profile they belong to
         try:
             with os.fdopen(descriptor, "ab") as stream:
                 if WINDOWS:
-                    self.child = subprocess.Popen([sys.executable, "-m", "serve.server", *server_args],
+                    self.child = subprocess.Popen([server_python, "-m", "serve.server", *server_args],
                                                   cwd=ROOT, stdin=subprocess.PIPE, stdout=stream,
                                                   stderr=subprocess.STDOUT, close_fds=True, env=child_env,
                                                   creationflags=subprocess.CREATE_NO_WINDOW)
@@ -821,7 +849,7 @@ class Host:
                     from serve import winjob
                     winjob.contain(self.child)
                 else:
-                    self.child = subprocess.Popen([sys.executable, "-m", "serve.server", *server_args],
+                    self.child = subprocess.Popen([server_python, "-m", "serve.server", *server_args],
                                                   cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
                                                   stderr=subprocess.STDOUT, close_fds=True,
                                                   pass_fds=(reader,), start_new_session=True, env=child_env)
