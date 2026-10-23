@@ -1,0 +1,11 @@
+GUI] Monitor: read every AMD Windows card through the driver''s own ADL2 metrics
+
+Problem: on Windows an AMD card has no NVML, so the Monitor had one set of GPU tiles at best, blank tiles for the rest, and called an AMD run ''CPU only'' (#1587). One-off reads leaked driver handles (#1434). Cards behind PCI bifurcation sit on links of different widths, which one aggregate number cannot show.
+
+Result: all AMD cards in a Windows machine get their own load, VRAM, temperature, power and PCIe link (generation and width) in the Monitor. 8 of 8 ADL2 tests pass on a machine with an R9700 and a RX 9070 XT. The payload default shape is byte-identical for NVIDIA and Linux: the per-card list appears only with more than one card, as in the last release.
+
+Approach: ported from the feature/windows-amd-telemetry tip (30001fb3), hand-merged onto 0.1.47; two conflict regions resolved mechanically, main Metal and NVML code paths kept. The AMD Windows path reads ADL2 PMLog (activity max of GFX and MEM, EDGE else MEM temp, BOARD_POWER else ASIC_POWER else GFX_POWER, VRAM from Adapter_DedicatedVRAMUsage, width from BUS_LANES else Device Manager CurrentLinkWidth, PCIe generation from Device Manager MaxLinkSpeed keyed by DevNum). close() destroys the PMLog device then the ADL context; the malloc callback stays alive on the reader. serve/test_telemetry_adl.py comes from the same branch.
+
+Validation: passed - serve/test_telemetry_adl.py (8 tests, 7.4 s, live machine: two cards enumerated with own x8 and x4 widths, Gen5, readings present, close() idempotent, one-off reads do not grow handles). Not run - serve/test_monitor.py (jinja2 missing in this environment), tools/test_setup_amd.py, python -m pytest tests/terminal, npm test in apps/host.
+
+Limits: the ADL2 PMLog bus speed sensor answered on neither card here, so gpu_pcie_rx_mb stays None on this driver pair (width and generation come from Device Manager instead). ADL2 adapter order is not HIP ordinal order on this machine (PMLog sees the RX 9070 XT first), so the engine-to-adapter mapping still belongs to the GPU ordering fix. The branch feat/windows-hip-vision carries committed conflict markers in its telemetry blobs (unconfirmed static analysis); nothing was taken from it.
