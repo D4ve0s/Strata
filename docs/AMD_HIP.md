@@ -59,8 +59,9 @@ the kernel's amdgpu driver (no ROCm install needed):
 - **Limits for now:** Setup does not offer the tuning
   (calibration) on AMD yet: its controls are being checked on HIP one at a time (#566). Since 0.1.39 a tuning run by
   hand (`./setup.sh --calibrate`) is saved for the AMD card it ran on and reused when setup runs again. The Monitor
-  shows the card's load, VRAM, temperature and power from Linux sysfs (0.1.32).
-
+ shows the card's load, VRAM, temperature and power from Linux sysfs on Linux (0.1.32), and on Windows from the
+ card's own driver metrics through ADL2 (`atiadlxx.dll`, the same library HWInfo reads; no ROCm needed). Every AMD
+ card in the machine gets its own numbers, including its own PCIe link width and generation.
 The rest of setup is the same as on NVIDIA: the model download, the start script, the server.
 
 ## Ready-made packages (0.2.2)
